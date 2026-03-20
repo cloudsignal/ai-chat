@@ -1,14 +1,14 @@
-"use client";
+'use client';
 
-import { useEffect, useRef } from "react";
-import type { ChatMessage } from "@/lib/types";
-import { MessageBubble } from "./message-bubble";
+import { useEffect, useRef } from 'react';
+import type { UIMessage } from 'ai';
+import { MessageBubble } from './message-bubble';
 
-export function MessageList({ messages }: { messages: ChatMessage[] }) {
+export function MessageList({ messages }: { messages: UIMessage[] }) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   if (messages.length === 0) {

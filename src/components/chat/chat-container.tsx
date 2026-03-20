@@ -1,35 +1,33 @@
-"use client";
+'use client';
 
-import { useChat } from "@/hooks/use-chat";
-import { MessageList } from "./message-list";
-import { ChatInput } from "./chat-input";
+import { useChat } from '@ai-sdk/react';
+import { CloudSignalChatTransport } from '@cloudsignal/ai-transport';
+import { MessageList } from './message-list';
+import { ChatInput } from './chat-input';
+
+// The drop-in transport — this is the only line that differs from a standard AI SDK app
+const transport = new CloudSignalChatTransport({
+  api: '/api/chat',
+  authEndpoint: '/api/auth/mqtt',
+  wssUrl: process.env.NEXT_PUBLIC_CLOUDSIGNAL_WSS_URL,
+});
 
 export function ChatContainer() {
-  const { messages, isStreaming, isConnected, isConnecting, error, sendMessage } = useChat();
+  const { messages, sendMessage, status, error } = useChat({ transport });
+
+  const isLoading = status === 'streaming' || status === 'submitted';
 
   return (
     <div className="flex flex-col h-screen bg-white dark:bg-gray-950">
       {/* Header */}
       <header className="border-b border-gray-200 dark:border-gray-800 px-4 py-3">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              CloudSignal AI Chat
-            </h1>
-            <p className="text-xs text-gray-500">
-              Powered by Claude via MQTT
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isConnected ? "bg-green-500" : isConnecting ? "bg-yellow-500 animate-pulse" : "bg-red-500"
-              }`}
-            />
-            <span className="text-xs text-gray-500">
-              {isConnected ? "Connected" : isConnecting ? "Connecting..." : "Disconnected"}
-            </span>
-          </div>
+        <div className="max-w-3xl mx-auto">
+          <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+            CloudSignal AI Chat
+          </h1>
+          <p className="text-xs text-gray-500">
+            Powered by Claude via MQTT — drop-in Vercel AI SDK transport
+          </p>
         </div>
       </header>
 
@@ -49,9 +47,9 @@ export function ChatContainer() {
 
       {/* Input */}
       <ChatInput
-        onSend={sendMessage}
-        disabled={!isConnected}
-        isStreaming={isStreaming}
+        onSend={(content) => sendMessage({ text: content })}
+        disabled={isLoading}
+        isStreaming={isLoading}
       />
     </div>
   );

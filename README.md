@@ -1,16 +1,38 @@
 # CloudSignal AI Chat
 
-Real-time AI chat powered by Claude, delivered over CloudSignal MQTT. This project demonstrates MQTT as a drop-in replacement for traditional AI chat transport layers (HTTP streaming, Ably, Pusher).
+A standard Vercel AI SDK chat app — with CloudSignal MQTT as the transport layer instead of HTTP streaming.
 
-## Why MQTT for AI Chat?
+## The Drop-In
 
-- **Offline recovery via retained messages** -- the broker holds state, not the client. Reconnect and pick up where you left off.
-- **Multi-device sync** -- subscribe from phone and desktop simultaneously; both receive every token.
-- **No per-message pricing** -- unlike Ably or Pusher, MQTT has no per-message fees.
-- **Standard protocol** -- MQTT is an ISO standard (ISO/IEC 20922). Any client library works, no vendor lock-in.
-- **Dual transport** -- server uses native MQTTS (lower latency), browser uses WSS. Same broker, same topics.
-- **QoS guarantees** -- critical messages (stream status, full responses) use QoS 1 for at-least-once delivery.
-- **Built-in multi-tenancy** -- VerneMQ mountpoints isolate organizations at the broker level.
+This is the only line that changes:
+
+```typescript
+// Default — HTTP streaming
+const { messages, sendMessage } = useChat();
+
+// CloudSignal — MQTT streaming (offline recovery, multi-device, ACL)
+const { messages, sendMessage } = useChat({
+  transport: new CloudSignalChatTransport({
+    api: '/api/chat',
+    authEndpoint: '/api/auth/mqtt',
+    wssUrl: 'wss://connect.cloudsignal.app:18885/',
+  }),
+});
+```
+
+Same `messages`. Same `sendMessage`. Same UI code. Different infrastructure.
+
+The `CloudSignalChatTransport` implements the Vercel AI SDK `ChatTransport` interface. Every feature of the SDK — streaming, error states, abort signals — works as normal. The browser just receives tokens over WebSocket instead of an HTTP response body.
+
+## Why MQTT for AI Chat
+
+- **Offline recovery via retained messages** — the broker holds the completed response. Reconnect and the full answer is delivered immediately, no re-request needed.
+- **Multi-device sync** — subscribe from phone and desktop simultaneously; both receive every token.
+- **No per-message pricing** — unlike Ably or Pusher, CloudSignal has no per-message fees.
+- **ISO standard protocol** — MQTT is ISO/IEC 20922. Any MQTT client library works, no vendor lock-in.
+- **QoS guarantees** — use QoS 0 for disposable token stream, QoS 1 for guaranteed delivery of critical messages.
+- **Broker-level tenant isolation** — VerneMQ mountpoints isolate organizations at the broker, not in application code.
+- **Per-message ACL enforcement** — topic-level access control on every publish and subscribe, not just at connection time.
 
 ## Architecture
 
@@ -18,20 +40,19 @@ Real-time AI chat powered by Claude, delivered over CloudSignal MQTT. This proje
 Browser (React)                          Next.js API Route
     |                                         |
     | WSS (port 18885)                        | MQTTS (port 8883)
-    | WebSocket transport                     | Native MQTT over TLS
+    | @cloudsignal/mqtt-client                | @cloudsignal/mqtt-client
     |                                         |
     +---------> CloudSignal Broker <----------+
 ```
 
-The browser connects via WebSocket Secure (WSS) using `@cloudsignal/mqtt-client`. The Next.js API route connects via native MQTTS using the `mqtt` package (MQTT.js). Both publish and subscribe to the same topics on the same broker.
+The browser connects via WebSocket Secure using `@cloudsignal/mqtt-client`. The Next.js API route connects via native MQTTS using the same package. Both talk to the same broker, same topics.
 
 ## How It Works
 
-1. User sends a message via HTTP POST to `/api/chat`
-2. The API route calls the Claude streaming API
-3. As tokens arrive, each is published to `chat/{sessionId}/response` (QoS 0)
-4. The browser client subscribes via WSS and renders tokens in real-time
-5. When the stream completes, the full response is published as a retained message for offline recovery
+1. `useChat` calls `transport.sendMessages()` — an HTTP POST that triggers the server.
+2. The server calls Claude via AI SDK `streamText()` and publishes `UIMessageChunk` objects to MQTT as tokens arrive.
+3. The browser's MQTT subscription converts the incoming messages into a `ReadableStream` that the AI SDK consumes normally.
+4. On disconnect and reconnect, the broker delivers the retained complete response — no data loss, no re-request.
 
 ## Quick Start
 
@@ -40,31 +61,11 @@ git clone <repo-url>
 cd cloudsignal-ai-chat
 npm install
 cp .env.example .env.local
-# Edit .env.local with your keys (see Environment Variables below)
+# Edit .env.local with your keys
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) to start chatting.
-
-## MQTT Topic Structure
-
-| Topic | QoS | Retained | Purpose |
-|-------|-----|----------|---------|
-| `chat/{sessionId}/messages` | 1 | No | User messages |
-| `chat/{sessionId}/response` | 0 | No | AI token stream |
-| `chat/{sessionId}/response/status` | 1 | Yes | Stream lifecycle (start, end, error) |
-| `chat/{sessionId}/response/complete` | 1 | Yes | Full assembled response |
-| `chat/{sessionId}/typing` | 0 | No | Typing indicators |
-| `chat/{sessionId}/metadata` | 1 | Yes | Session metadata |
-
-## Offline Recovery
-
-When a client disconnects mid-stream:
-
-- The server continues streaming from Claude, publishing each token and the final response
-- Retained messages are stored on the broker: `response/complete` and `response/status`
-- When the client reconnects, the broker delivers the retained messages immediately
-- No data loss, no re-request needed
 
 ## Environment Variables
 
@@ -79,27 +80,44 @@ When a client disconnects mid-stream:
 
 Copy `.env.example` to `.env.local` and fill in your values.
 
-## CloudSignal Setup
+## MQTT Topic Structure
 
-1. Create an account at [dashboard.cloudsignal.app](https://dashboard.cloudsignal.app)
-2. Create an organization
-3. Add an ACL rule: topic pattern `chat/#`, access: publish + subscribe
-4. Copy your org UUID and secret key into `.env.local`
+| Topic | QoS | Retained | Purpose |
+|-------|-----|----------|---------|
+| `chat/{chatId}/stream` | 0 | No | UIMessageChunk stream |
+| `chat/{chatId}/complete` | 1 | Yes | Full response for offline recovery |
+
+## Edge Case Handling
+
+The transport handles the following without any application code:
+
+- Stream timeout (server crash protection — stream is closed after a configurable idle period)
+- HTTP error propagation (non-2xx responses are surfaced as AI SDK errors)
+- Request ID filtering (prevents interleaved chunks from concurrent requests)
+- Stale retained message validation (ignores retained messages from previous sessions)
+- Subscription cleanup (unsubscribes and disconnects on abort or completion)
+
+## Security
+
+See [MQTT AI Chat Security Spec](../docs/superpowers/specs/2026-03-20-mqtt-ai-chat-security-spec.md) for a detailed comparison of CloudSignal MQTT vs HTTP streaming and proprietary services.
 
 ## Tech Stack
 
 - [Next.js 16](https://nextjs.org/) with App Router
 - [React 19](https://react.dev/)
-- [@anthropic-ai/sdk](https://github.com/anthropics/anthropic-sdk-typescript) for Claude streaming
-- [mqtt](https://github.com/mqttjs/MQTT.js) (MQTT.js) for server-side MQTTS
-- [@cloudsignal/mqtt-client](https://www.npmjs.com/package/@cloudsignal/mqtt-client) for browser-side WSS
+- [Vercel AI SDK](https://sdk.vercel.ai/) (`ai` package) for `useChat`, `streamText`, and `UIMessageChunk`
+- [@anthropic-ai/sdk](https://github.com/anthropics/anthropic-sdk-typescript) for Claude
 - [Tailwind CSS](https://tailwindcss.com/) for styling
+
+## Packages
+
+- **`@cloudsignal/ai-transport`** — the `CloudSignalChatTransport` class that implements the Vercel AI SDK `ChatTransport` interface over MQTT.
+- **`@cloudsignal/mqtt-client`** — shared MQTT client used by both the browser (WSS) and the server (MQTTS).
 
 ## Limitations
 
-- **In-memory conversation history** — Chat history is stored in server memory and will be lost on restart. For production, replace with a persistent store (database, Redis, etc.).
-- **No token refresh** — MQTT credentials expire after 60 minutes. The demo does not automatically refresh tokens. For long sessions, implement a refresh timer using the `refreshRecommendedAt` field from the auth response.
-- **Unauthenticated auth endpoint** — The `/api/auth/mqtt` endpoint has no authentication. For any deployment beyond localhost, add rate limiting or session-based access control.
+- **In-memory conversation history** — chat history is stored in server memory and will be lost on restart. For production, replace with a persistent store (database, Redis, etc.).
+- **Unauthenticated auth endpoint** — the `/api/auth/mqtt` endpoint has no authentication. For any deployment beyond localhost, add rate limiting or session-based access control.
 
 ## License
 

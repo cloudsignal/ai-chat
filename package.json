@@ -9,8 +9,12 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.58",
+    "@ai-sdk/react": "^3.0.118",
     "@anthropic-ai/sdk": "^0.78.0",
+    "@cloudsignal/ai-transport": "file:../cloudsignal-ai-transport",
     "@cloudsignal/mqtt-client": "^2.2.2",
+    "ai": "^6.0.116",
     "mqtt": "^5.15.0",
     "next": "16.1.6",
     "react": "19.2.3",

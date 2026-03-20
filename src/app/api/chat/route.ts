@@ -1,40 +1,33 @@
-import { NextRequest, NextResponse } from "next/server";
-import { streamChatResponse } from "@/lib/claude";
-import type { ChatRequest } from "@/lib/types";
-
-// In-memory conversation history per session (production would use a database)
-const sessionHistory = new Map<string, Array<{ role: "user" | "assistant"; content: string }>>();
-const sessionLocks = new Map<string, Promise<void>>();
+import { NextRequest, NextResponse } from 'next/server';
+import { streamText } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
+import { publishStreamToMqtt } from '@cloudsignal/ai-transport/server';
+import { getServerMqttClient } from '@/lib/mqtt-server';
 
 export async function POST(request: NextRequest) {
-  const body = (await request.json()) as ChatRequest;
-  const { sessionId, message } = body;
+  const { chatId, messages, requestId } = await request.json();
 
-  if (!sessionId || typeof sessionId !== "string" || sessionId.length > 100) {
-    return NextResponse.json({ error: "Invalid sessionId" }, { status: 400 });
+  if (!chatId || !messages?.length) {
+    return NextResponse.json(
+      { error: 'chatId and messages are required' },
+      { status: 400 },
+    );
   }
-  if (!message || typeof message !== "string" || message.length > 50000) {
-    return NextResponse.json({ error: "Invalid message" }, { status: 400 });
-  }
 
-  // Get or create conversation history
-  if (!sessionHistory.has(sessionId)) {
-    sessionHistory.set(sessionId, []);
-  }
-  const history = sessionHistory.get(sessionId)!;
+  const mqttClient = await getServerMqttClient();
 
-  // Add user message to history
-  history.push({ role: "user", content: message });
-
-  // Serialize concurrent requests per session to prevent history race conditions
-  const prevLock = sessionLocks.get(sessionId) ?? Promise.resolve();
-  const currentLock = prevLock.then(async () => {
-    const assistantContent = await streamChatResponse(sessionId, message, history);
-    history.push({ role: "assistant", content: assistantContent });
-  }).catch((err) => {
-    console.error(`[chat] Stream error for session ${sessionId}:`, err);
+  const result = streamText({
+    model: anthropic('claude-sonnet-4-20250514'),
+    messages,
   });
-  sessionLocks.set(sessionId, currentLock);
 
-  return NextResponse.json({ status: "streaming", sessionId }, { status: 202 });
+  // Fire-and-forget: publish AI stream to MQTT
+  // Response is delivered to the client via MQTT subscription, not HTTP
+  publishStreamToMqtt(mqttClient, chatId, result, { requestId }).catch(
+    (err) => {
+      console.error(`[chat] Stream publish error for ${chatId}:`, err);
+    },
+  );
+
+  return NextResponse.json({ status: 'streaming', chatId }, { status: 202 });
 }
