@@ -13,7 +13,7 @@
     "@ai-sdk/react": "^3.0.118",
     "@anthropic-ai/sdk": "^0.78.0",
     "@cloudsignal/ai-transport": "^0.1.0",
-    "@cloudsignal/mqtt-client": "^2.2.2",
+    "@cloudsignal/mqtt-client": "^2.2.5",
     "ai": "^6.0.116",
     "mqtt": "^5.15.0",
     "next": "16.1.6",
